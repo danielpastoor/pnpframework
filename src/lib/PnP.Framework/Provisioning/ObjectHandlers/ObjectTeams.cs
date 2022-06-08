@@ -4,7 +4,6 @@ using Microsoft.SharePoint.Client;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using PnP.Framework.Diagnostics;
-using PnP.Framework.Graph;
 using PnP.Framework.Provisioning.Connectors;
 using PnP.Framework.Provisioning.Model;
 using PnP.Framework.Provisioning.Model.Configuration;
@@ -19,7 +18,6 @@ using System.IO;
 using System.Linq;
 using System.Net.Http.Headers;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace PnP.Framework.Provisioning.ObjectHandlers
 {
@@ -93,15 +91,33 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
                 // Call Archive or Unarchive for the current Team
                 ArchiveTeam(scope, teamId, team.Archived, accessToken);
 
-                try
+                var teamInfo = string.Empty;
+                var wait = true;
+                var iterations = 0;
+                while (wait)
                 {
-                    // Get the whole Team that we just created and return it back as the method result
-                    return JToken.Parse(HttpHelper.MakeGetRequestForString($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}", accessToken));
+                    iterations++;
+
+                    try
+                    {
+                        teamInfo = HttpHelper.MakeGetRequestForString($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}?$select=isArchived", accessToken);
+                        if (!string.IsNullOrEmpty(teamInfo))
+                        {
+                            wait = false;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        Thread.Sleep(TimeSpan.FromSeconds(5));
+                    }
+
+                    if (iterations > 60)
+                    {
+                        scope.LogError(CoreResources.Provisioning_ObjectHandlers_Teams_Team_FetchingError);
+                    }
                 }
-                catch (Exception ex)
-                {
-                    scope.LogError(CoreResources.Provisioning_ObjectHandlers_Teams_Team_FetchingError, ex.Message);
-                }
+
+                return JToken.Parse(teamInfo);
             }
 
             return null;
@@ -130,8 +146,8 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
                     System.Threading.Thread.Sleep(TimeSpan.FromSeconds(5));
                 }
 
-                // Don't wait more than 2 minute
-                if (iterations > 24)
+                // Don't wait more than 5 minutes
+                if (iterations > 60)
                 {
                     //wait = false;
                     throw new Exception($"Team with id {teamId} not created within timeout.");
@@ -490,24 +506,15 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
                     System.Threading.Thread.Sleep(TimeSpan.FromSeconds(5));
                 }
 
-                // Don't wait more than 60 seconds
-                if (iterations > 12)
+                // Don't wait more than 5 minutes
+                if (iterations > 60)
                 {
                     wait = false;
                 }
             }
 
             // Ensure that Files tab is available right after Teams creation
-            try
-            {
-                var graphClient = GraphUtility.CreateGraphClient(accessToken);
-
-                InitTeamDrive(groupId, graphClient).GetAwaiter();
-            }
-            catch (Exception ex)
-            {
-                // Swallow if we can't make sure the file tab exists
-            }
+            InitTeamDrive(groupId, accessToken);
 
             return (teamId);
         }
@@ -572,8 +579,31 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
         /// <param name="accessToken">The OAuth 2.0 Access Token</param>
         private static void ArchiveTeam(PnPMonitoredScope scope, string teamId, bool archived, string accessToken)
         {
-            string archiveStatusRequest = HttpHelper.MakeGetRequestForString(
-                $"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}?$select=isArchived", accessToken: accessToken);
+            var archiveStatusRequest = string.Empty;
+            var wait = true;
+            var iterations = 0;
+            while (wait)
+            {
+                iterations++;
+
+                try
+                {
+                    archiveStatusRequest = HttpHelper.MakeGetRequestForString($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}?$select=isArchived", accessToken);
+                    if (!string.IsNullOrEmpty(archiveStatusRequest))
+                    {
+                        wait = false;
+                    }
+                }
+                catch (Exception)
+                {
+                    Thread.Sleep(TimeSpan.FromSeconds(5));
+                }
+
+                if (iterations > 60)
+                {
+                    throw new Exception($"Could not get archival status for team with id {teamId} within timeout.");
+                }
+            }
 
             bool isCurrentlyArchived = JToken.Parse(archiveStatusRequest).Value<bool>("isArchived");
 
@@ -909,7 +939,33 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
 
         public static JToken GetExistingTeamChannels(string teamId, string accessToken)
         {
-            return JToken.Parse(HttpHelper.MakeGetRequestForString($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}/channels", accessToken))["value"];
+            var channels = string.Empty;
+            var wait = true;
+            var iterations = 0;
+            while (wait)
+            {
+                iterations++;
+
+                try
+                {
+                    channels = HttpHelper.MakeGetRequestForString($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}/channels", accessToken);
+                    if (!string.IsNullOrEmpty(channels))
+                    {
+                        wait = false;
+                    }
+                }
+                catch (Exception)
+                {
+                    Thread.Sleep(TimeSpan.FromSeconds(5));
+                }
+
+                if (iterations > 60)
+                {
+                    throw new Exception($"Could not get channels for team with id {teamId} within timeout.");
+                }
+            }
+
+            return JToken.Parse(channels)["value"];
         }
 
         private static string UpdateTeamChannel(Model.Teams.TeamChannel channel, string teamId, JToken existingChannel, string accessToken, TokenParser parser)
@@ -931,8 +987,28 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
                 displayName = identicalChannelName ? null : newChannelName,
             };
 
-            // Updating isFavouriteByDefault is currently not supported on either endpoint. Using the beta endpoint results in an error.
-            HttpHelper.MakePatchRequestForString($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}/channels/{channelId}", channelToUpdate, HttpHelper.JsonContentType, accessToken);
+            var wait = true;
+            var iterations = 0;
+            while (wait)
+            {
+                iterations++;
+
+                try
+                {
+                    // Updating isFavouriteByDefault is currently not supported on either endpoint. Using the beta endpoint results in an error.
+                    HttpHelper.MakePatchRequestForString($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}/channels/{channelId}", channelToUpdate, HttpHelper.JsonContentType, accessToken);
+                    wait = false;
+                }
+                catch (Exception)
+                {
+                    Thread.Sleep(TimeSpan.FromSeconds(5));
+                }
+
+                if (iterations > 60)
+                {
+                    throw new Exception($"Could not update channels for team with id {teamId} within timeout.");
+                }
+            }
 
             return channelId;
         }
@@ -1025,7 +1101,27 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
 
         private static void RemoveTeamTab(string tabId, string channelId, string teamId, string accessToken)
         {
-            HttpHelper.MakeDeleteRequest($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}/channels/{channelId}/tabs/{tabId}", accessToken);
+            var wait = true;
+            var iterations = 0;
+            while (wait)
+            {
+                iterations++;
+
+                try
+                {
+                    HttpHelper.MakeDeleteRequest($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}/channels/{channelId}/tabs/{tabId}", accessToken);
+                    wait = false;
+                }
+                catch (Exception)
+                {
+                    Thread.Sleep(TimeSpan.FromSeconds(5));
+                }
+
+                if (iterations > 60)
+                {
+                    throw new Exception($"Could not get tab {tabId} in channel {channelId} in team with id {teamId} within timeout.");
+                }
+            }
         }
 
         public static JToken GetExistingTeamChannelTabs(string teamId, string channelId, string accessToken)
@@ -1812,43 +1908,65 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
             return mailNickname;
         }
 
-        public static async Task InitTeamDrive(string GroupId, Microsoft.Graph.GraphServiceClient graphClient = null)
+        public static void InitTeamDrive(string teamId, string accessToken)
         {
-            bool wait = true;
-            int iterations = 0;
+            var channels = string.Empty;
+            var wait = true;
+            var iterations = 0;
             while (wait)
             {
                 iterations++;
 
                 try
                 {
-                    var primaryChannel = await graphClient.Teams[GroupId].PrimaryChannel.Request().GetAsync();
-                    var channels = await graphClient.Teams[GroupId].Channels.Request().GetAsync();
-                    foreach (var channel in channels)
+                    channels = HttpHelper.MakeGetRequestForString($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}/channels", accessToken);
+                    if (!string.IsNullOrEmpty(channels))
                     {
-                        if (channel.DisplayName == primaryChannel.DisplayName)
-                        {
-                            var getChannel = await graphClient.Teams[GroupId].Channels[channel.Id].Request().GetAsync();
-                            if (getChannel != null)
-                            {
-                                Microsoft.Graph.DriveItem filesFolder = await graphClient.Teams[GroupId].Channels[channel.Id].FilesFolder.Request().GetAsync();
-
-                                if (filesFolder != null)
-                                    wait = false;
-                            }
-                        }
+                        wait = false;
                     }
                 }
                 catch (Exception)
                 {
-                    // In case of exception wait for 5 secs
-                    System.Threading.Thread.Sleep(TimeSpan.FromSeconds(5));
+                    Thread.Sleep(TimeSpan.FromSeconds(5));
                 }
 
-                // Don't wait more than 60 seconds
-                if (iterations > 12)
+                if (iterations > 60)
                 {
-                    wait = false;
+                    throw new Exception($"Could not get channels for team with id {teamId} within timeout.");
+                }
+            }
+
+            var existingChannels = JToken.Parse(channels)["value"];
+
+            var existingChannel = existingChannels?.FirstOrDefault(x => x["displayName"].ToString() == "General");
+
+            if (existingChannel == null)
+            {
+                throw new Exception($"Could not get General channel of team with id {teamId}.");
+            }
+
+            wait = true;
+            iterations = 0;
+            while (wait)
+            {
+                iterations++;
+
+                try
+                {
+                    var driveItem = HttpHelper.MakeGetRequestForString($"{GraphHelper.MicrosoftGraphBaseURI}v1.0/teams/{teamId}/channels/{existingChannel["id"]}/filesfolder", accessToken);
+                    if (!string.IsNullOrEmpty(driveItem))
+                    {
+                        wait = false;
+                    }
+                }
+                catch (Exception)
+                {
+                    Thread.Sleep(TimeSpan.FromSeconds(5));
+                }
+
+                if (iterations > 60)
+                {
+                    throw new Exception($"Could not get drive item of General channel in team with id {teamId} within timeout.");
                 }
             }
         }
