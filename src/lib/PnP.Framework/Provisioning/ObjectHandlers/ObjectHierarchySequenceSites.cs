@@ -368,7 +368,7 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
                                         {
                                             try
                                             {
-                                                await siteContext.TeamifyAsync();
+                                                await siteContext.TeamifyAsync(graphAccessToken);
                                                 WriteMessage($"Teamifying the O365 group connected site at URL - {siteContext.Url}", ProvisioningMessageType.Progress);
                                             }
                                             catch (Exception ex)

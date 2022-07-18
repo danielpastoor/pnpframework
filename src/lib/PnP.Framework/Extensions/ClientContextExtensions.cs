@@ -216,7 +216,13 @@ namespace Microsoft.SharePoint.Client
                             errorSb.AppendLine($"SocketErrorCode: {socketEx.SocketErrorCode}"); //ConnectionReset
                             errorSb.AppendLine($"Message: {socketEx.Message}"); //An existing connection was forcibly closed by the remote host
                             Log.Error(Constants.LOGGING_SOURCE, CoreResources.ClientContextExtensions_ExecuteQueryRetryException, errorSb.ToString());
-                            
+
+                            // Hostname unknown error code 11001 should not be retried
+                            if(socketEx.ErrorCode == 11001)
+                            {
+                                throw;
+                            }
+
                             //retry
                             wrapper = (ClientRequestWrapper)wex.Data["ClientRequest"];
                             retry = true;
@@ -1085,12 +1091,13 @@ namespace Microsoft.SharePoint.Client
         /// Enable MS Teams team on a group connected team site
         /// </summary>
         /// <param name="clientContext"></param>
+        /// <param name="graphAccessToken"></param>
         /// <returns></returns>
-        public static async Task<string> TeamifyAsync(this ClientContext clientContext)
+        public static async Task<string> TeamifyAsync(this ClientContext clientContext, string graphAccessToken = null)
         {
             await new SynchronizationContextRemover();
 
-            return await SiteCollection.TeamifySiteAsync(clientContext);
+            return await SiteCollection.TeamifySiteAsync(clientContext, graphAccessToken);
         }
 
 
